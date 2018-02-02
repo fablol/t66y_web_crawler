@@ -104,6 +104,9 @@ def queryurl(URL):
 
 def download_torrent(torrent_hash, torrent_name='', torrent_path=''):
     # 此处 url 对应为帖子地址
+    if torrent_hash is None :
+        print('torrent_hash 为: None')
+        return
     try:
         print('>>> 开始下载种子...')
         get_ref_url = 'http://www.rmdown.com/link.php?hash={}'.format(torrent_hash)
