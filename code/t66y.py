@@ -159,7 +159,7 @@ def download_pics(pic_urls, pic_path):
     task_threads = []
     num = 0
     for pic_url in pic_urls:
-        num = num++
+        num += 1
         print("第{}/{}个:".format(num,len(pic_urls)))
         download_pic(pic_url,'',pic_path)
 
