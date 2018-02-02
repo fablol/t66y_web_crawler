@@ -6,8 +6,8 @@ import os,re
 from bs4 import BeautifulSoup
 
 proxies = {
-    'https': 'https://192.168.23.150:1080',
-    'http': 'http://192.168.23.150:1080'
+    'https': 'socks5://192.168.17.2:1082',
+    'http': 'socks5://192.168.17.2:1082'
 }
 
 class StoppableThread(threading.Thread):
@@ -174,7 +174,7 @@ def download_pics_from_range(url, page_start, page_end, key_word_list, save_path
             continue
         pic_urls = get_pic_urls(page)
         print(save_path+'\\'+re.sub('[>/:*\|?\\<]','-',i[1]))
-        download_pics(pic_urls,save_path+'\\'+'pictures'+'\\'+re.sub('[>/:*\|?\\<]','-',i[1]))
+        download_pics(pic_urls,os.path.join(save_path,'pictures',re.sub('[>/:*\|?\\<]','-',i[1])))
 
 def download_all_from_range(url, page_start, page_end, key_word_list, save_path):
     items = get_range(url, page_start, page_end)
@@ -184,8 +184,8 @@ def download_all_from_range(url, page_start, page_end, key_word_list, save_path)
         page = get_page(cl_url+'htm_data'+i[0])
         pic_urls = get_pic_urls(page)
         torrent_hash = get_torrent_hash(page)
-        download_pics(pic_urls,save_path+'\\'+'pictures'+'\\'+re.sub('[>/:*\|?\\<]','-',i[1]))
-        download_torrent(torrent_hash, i[1], save_path+'\\'+'torrents'+'\\'+re.sub('[>/:*\|?\\<]','-',i[1]))
+        download_pics(pic_urls,os.path.join(save_path,'pictures',re.sub('[>/:*\|?\\<]','-',i[1])))
+        download_torrent(torrent_hash, i[1], os.path.join(save_path,'torrents',re.sub('[>/:*\|?\\<]','-',i[1])))
 
 if __name__ == '__main__':
 
