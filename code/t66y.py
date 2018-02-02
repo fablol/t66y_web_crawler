@@ -159,7 +159,8 @@ def download_pics(pic_urls, pic_path):
     task_threads = []
     num = 0
     for pic_url in pic_urls:
-        print("第{}/{}个:".format(++num,len(pic_urls)))
+        num = num++
+        print("第{}/{}个:".format(num,len(pic_urls)))
         download_pic(pic_url,'',pic_path)
 
 def download_pics_from_range(url, page_start, page_end, key_word_list, save_path):
