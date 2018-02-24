@@ -158,6 +158,8 @@ def download_pic(pic_url,pic_name='',pic_path=''):
         pass
 
 def download_pics(pic_urls, pic_path):
+    if pic_urls is None:
+        return
     print('>>> 共 %d 张图片需要下载...' % len(pic_urls))
     task_threads = []
     num = 0
