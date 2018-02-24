@@ -6,8 +6,8 @@ import os,re
 from bs4 import BeautifulSoup
 
 proxies = {
-    'https': 'socks5://192.168.17.2:1082',
-    'http': 'socks5://192.168.17.2:1082'
+    'https': 'socks5://127.0.0.1:1080',
+    'http': 'socks5://127.0.0.1:1080'
 }
 
 class StoppableThread(threading.Thread):
@@ -226,7 +226,7 @@ if __name__ == '__main__':
     8. 国产原创区   Homemade_original
     '''
     print(welcome_info)
-    save_path = 'your path'
+    save_path = 't66y'  # 默认目录
     # key_words = ['原创','原創']
     key_words = []
 
