@@ -1,239 +1,177 @@
 # -*- coding:utf-8 -*-
 
-import urllib, http.cookiejar, requests
-import threading
-import os,re
+import time
+import aiohttp
+import os
+import re
+import asyncio
+import redis
+from queue import Queue
+from threading import Thread
 from bs4 import BeautifulSoup
 
-proxies = {
-    'https': 'socks5://127.0.0.1:1080',
-    'http': 'socks5://127.0.0.1:1080'
-}
 
-class StoppableThread(threading.Thread):
-    """Thread class with a stop() method. The thread itself has to check
-    regularly for the stopped() condition."""
+def now(): return time.time()
 
-    def __init__(self):
-        super(StoppableThread, self).__init__()
-        self._stop_event = threading.Event()
+async def aiohttp_parse_index(key_words, url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            print(resp.status)
+            html = await resp.text(encoding='gbk')
+            soup = BeautifulSoup(html, features='html5lib')
+            content_list = soup.find_all("td", {'class': 'tal'})
+            for target in content_list:
+                title = target.find('h3').get_text()
+                if any(key in title for key in key_words):
+                    url = target.find("a")
+                    print(title)
+                    # print(str(url['href']))
+                    dict = (str(url['href']), title)
+                    pages_queue.put(dict)
+            await asyncio.sleep(2)
 
-    def stop(self):
-        self._stop_event.set()
 
-    def stopped(self):
-        return self._stop_event.is_set()
+async def aiohttp_parse_pic(url, title):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(base_url + url) as resp:
+            print(resp.status)
+            html = await resp.text(encoding='gbk')
+            url_list = []
+            soup = BeautifulSoup(html, features='html5lib')
+            content_list = soup.find_all("tr", {'class': 'tr1 do_not_catch'})
+            for target in content_list:
+                img_list = target.find_all('input', {'data-link': re.compile('(https?|ftp|file)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]'),'type': 'image'})
+                # img_list = target.find_all('input', {
+                #     'data-link': re.compile('(https?|ftp|file)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]'),
+                #     'data-src': re.compile('(https?|ftp|file)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]'),
+                #     'type': 'image',
+                #     'src': re.compile('(https?|ftp|file)://[-A-Za-z0-9+&@#/%?=~_|!:,.;]+[-A-Za-z0-9+&@#/%=~_|]')
+                # })
+                # print(img_list)
+                for img_src in img_list:
+                    url_list.append(img_src['data-src'])
+            pics_queue.put((title, url_list))
+            # print(url_list)
+            await asyncio.sleep(2)
 
-def get_page(url,timeout=20):
-    # 仅返回网页，不做任何操作
+
+async def download_pic(pic_url, pic_name='', pic_path=''):
     try:
-        response = requests.get(url, proxies=proxies)
-        response.encoding = 'gbk'
-        page = response.text
-        return page
-    except:
-        print('>>> 页面下载失败...%s' % url)
-
-def get_item(url):
-    # 通过分析网页返回该页所有的帖子信息：[地址, 标题]
-    # 部分帖子(尤其是达盖尔)存在颜色标记, 需要额外去除
-    try:
-        page = get_page(url)
-        page = re.sub('[\n|\r|\t]|<font color=.+?>|</font>','',page)
-        item_pattern = re.compile('(?<=<h3><a href="htm_data).+?(?=</a></h3>)')
-        items = re.findall(item_pattern, page)
-        res = [re.split('" target="_blank" id="">',item) for item in items]
-        return res
-    except:
-        print('>>> 获取帖子信息失败...')
-
-def get_range(url, page_start, page_end):
-    # 批量下载多页帖子信息，未实现多线程，需要优化
-    # 返回结果同 get_item
-    items = []
-    for page_num in range(page_start, page_end+1):
-        try:
-            print('>>> 开始下载第 %d 页...' % page_num)
-            items = items + get_item(url + '&page=%d' % page_num)
-            print('    第 %d 页下载成功' % page_num)
-        except:
-            print('    第 %d 页下载失败' % page_num)
-        finally:
-            print('>>> -------------------------------')
-    return items
-
-def search_item(key_word_list, items):
-    print('>>> 目标包含 %d 条目, 按照关键词: %s 展开搜索...' % (len(items),' | '.join(key_word_list)))
-    search_result = []
-    if len(key_word_list) == 0 : return items
-    for item in items:
-        for key_word in key_word_list:
-            if key_word in item[1]:
-                search_result.append(item)
-                break
-    print('>>> 共搜索到 %d 个主题' % len(search_result))
-    return search_result
-
-def get_torrent_hash(page):
-    try:
-        hash_pattern = re.compile('(?<=hash=).+?(?=&z">)') 
-        torrent_hash = re.findall(hash_pattern, page)[0]
-        return torrent_hash
-    except Exception as e:
-        print(' get_torrent_hash 错误为:{}'.format(e))
-        pass
-    finally:
-        print('>>> -------------------------------')
-
-
-def get_pic_urls(page):
-    try:
-        pic_pattern1 = re.compile('(?<=<input src=\').+?(?=\'\s)')
-        pic_pattern2 = re.compile('(?<=img src=\').+?(?=\'\s)')
-        pic_urls = re.findall(pic_pattern1, page) + re.findall(pic_pattern2, page)
-        return pic_urls
-    except Exception as e:
-        print('get_pic_urls 错误为:{}'.format(e))
-        pass
-    finally:
-        print('>>> -------------------------------')
-
-def queryurl(URL):
-    content = requests.get(URL,proxies=proxies).content
-    return content
-
-def download_torrent(torrent_hash, torrent_name='', torrent_path=''):
-    # 此处 url 对应为帖子地址
-    if torrent_hash is None :
-        print('torrent_hash 为: None')
-        return
-    try:
-        print('>>> 开始下载种子...')
-        get_ref_url = 'http://www.rmdown.com/link.php?hash={}'.format(torrent_hash)
-        reff_content = queryurl(get_ref_url)
-        soup = BeautifulSoup(reff_content, 'lxml')
-        reff = soup.find(attrs={"name": "reff"})['value']
-        torrent_url = 'http://www.rmdown.com/download.php?reff={}&ref={}'.format(reff,torrent_hash)
-        torrent_content=queryurl(torrent_url)
-
-        if len(torrent_name) == 0:
-            torrent_name = torrent_hash
-        else:
-            torrent_name = re.sub('[>/:*\|?\\<]',' - ',torrent_name)
-        if len(torrent_path) != 0:
-            if not(os.path.exists(torrent_path)):
-                os.makedirs(torrent_path)
-            file_name = os.path.join(torrent_path, torrent_name + '.torrent')
-        else:
-            file_name = torrent_name + '.torrent'
-        with open(file_name, "wb") as code:
-            code.write(torrent_content)
-    except Exception as e:
-        print('{} 错误为:{}'.format(get_ref_url, e))
-        pass
-        
-    finally:
-        print('>>> -------------------------------')
-
-def download_pic(pic_url,pic_name='',pic_path=''):
-    try:
-        if len(pic_name) == 0: pic_name = re.split('/',pic_url)[-1]
+        if len(pic_name) == 0:
+            pic_name = re.split('/', pic_url)[-1]
         if len(pic_path) != 0:
-            if not(os.path.exists(pic_path)):
-                os.makedirs(pic_path)
+            if not (os.path.exists(pic_path)):
+                await os.makedirs(pic_path)
             file_name = os.path.join(pic_path, pic_name)
         else:
             file_name = pic_name
         if os.path.isfile(file_name):
             print('    文件已存在，无需重复下载')
             return
-        r = requests.get(pic_url, proxies=proxies,timeout = 20)
-        # r = requests.get(pic_url,timeout = 20)
-        with open(file_name, "wb") as code:
-            code.write(r.content)
-        print('    下载成功 %s' % pic_url)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                pic = await response.read()  # 以Bytes方式读入非文字
+                with open(file_name, "wb") as code:
+                    code.write(pic)
+        # print('    下载成功 %s' % pic_url)
     except Exception as e:
         print(e)
         print('    下载失败 %s' % pic_url)
         pass
 
-def download_pics(pic_urls, pic_path):
+
+async def download_pics(pic_urls, pic_path):
     if pic_urls is None:
         return
     print('>>> 共 %d 张图片需要下载...' % len(pic_urls))
-    task_threads = []
     num = 0
     for pic_url in pic_urls:
         num += 1
-        print("第{}/{}个:".format(num,len(pic_urls)))
-        download_pic(pic_url,'',pic_path)
+        print("第{}/{}个:".format(num, len(pic_urls)))
+        await download_pic(pic_url, '', pic_path)
+    await asyncio.sleep(2)
 
-def download_pics_from_range(url, page_start, page_end, key_word_list, save_path):
-    items = get_range(url, page_start, page_end)
-    matched_items = search_item(key_word_list, items)
-    for i in matched_items:
-        i[1]=i[1].replace('&nbsp; ','')
-        print('>>> 下载主题 %s' % i[1])
-        page = get_page(cl_url+'htm_data'+i[0])
-        if page is None:
+
+def get_redis():
+    connection_pool = redis.ConnectionPool(host='127.0.0.1', db=3)
+    return redis.Redis(connection_pool=connection_pool)
+
+
+async def parse_index_worker():
+    print('Start parse_index_worker')
+
+    while True:
+        start = now()
+        # task = rcon.rpop("queue")
+
+        if index_queue.empty():
+            await asyncio.sleep(1)
             continue
-        pic_urls = get_pic_urls(page)
-        print(save_path+'\\'+re.sub('[>/:*\|?\\<]','-',i[1]))
-        download_pics(pic_urls,os.path.join(save_path,'pictures',re.sub('[>/:*\|?\\<]','-',i[1])))
+        url = index_queue.get_nowait()
+        print('Wait index ', url)
+        await aiohttp_parse_index(key_words, url)
+        print('Done index ', url, now() - start)
 
-def download_all_from_range(url, page_start, page_end, key_word_list, save_path):
-    items = get_range(url, page_start, page_end)
-    matched_items = search_item(key_word_list, items)
-    for i in matched_items:
-        print('>>> 下载主题 %s' % i[1])
-        page = get_page(cl_url+'htm_data'+i[0])
-        pic_urls = get_pic_urls(page)
-        torrent_hash = get_torrent_hash(page)
-        download_pics(pic_urls,os.path.join(save_path,'pictures',re.sub('[>/:*\|?\\<]','-',i[1])))
-        download_torrent(torrent_hash, i[1], os.path.join(save_path,'torrents',re.sub('[>/:*\|?\\<]','-',i[1])))
+
+async def parse_pic_worker():
+    print('Start parse_pic_worker')
+
+    while True:
+        start = now()
+        # task = rcon.rpop("queue")
+
+        if pages_queue.empty():
+            await asyncio.sleep(1)
+            continue
+        url = pages_queue.get_nowait()
+        print('Wait pages ', url[1])
+        await aiohttp_parse_pic(url[0], url[1])
+        print('Done pages ', url[1], now() - start)
+
+
+async def download_pic_worker():
+    print('Start download_worker')
+
+    while True:
+        start = now()
+        # task = rcon.rpop("queue")
+        if pics_queue.empty():
+            await asyncio.sleep(1)
+            continue
+        url = pics_queue.get_nowait()
+        print('Wait download ', url[0])
+        await download_pics(url[1], os.path.join(save_path, 'pictures', re.sub('[>/:*\|?\\<]', '-', url[0])))
+        print('Done download ', url[0], now() - start)
+
+
+def main():
+    asyncio.ensure_future(parse_index_worker())
+    asyncio.ensure_future(parse_pic_worker())
+    asyncio.ensure_future(download_pic_worker())
+
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt as e:
+        print(asyncio.gather(*asyncio.Task.all_tasks()).cancel())
+        loop.stop()
+        loop.run_forever()
+    finally:
+        loop.close()
+
 
 if __name__ == '__main__':
+    pages_queue = Queue()
+    pics_queue = Queue()
+    index_queue = Queue()
+    download_queue = Queue()
 
-    cl_url = 'http://t66y.com/' # 定期更换
-    Asia_non_mosaic    = cl_url + 'thread0806.php?fid=2'   # 亚洲无码
-    Asia_mosaic        = cl_url + 'thread0806.php?fid=15'  # 亚洲有码
-    Original_Western   = cl_url + 'thread0806.php?fid=4'   # 欧美原创
-    Original_Animation = cl_url + 'thread0806.php?fid=5'   # 动漫原创
-    Flag_of_Daguerre   = cl_url + 'thread0806.php?fid=16'  # 达盖尔的旗帜
-    New_Era_for_All    = cl_url + 'thread0806.php?fid=8'   # 新时代的我们
-    Tech_Talk          = cl_url + 'thread0806.php?fid=7'   # 技术讨论区
-    Homemade_original  = cl_url + 'thread0806.php?fid=25'   # 国产原创区
-    address_dic = {1: Asia_non_mosaic,
-                   2: Asia_mosaic,
-                   3: Original_Western,
-                   4: Original_Animation,
-                   5: Flag_of_Daguerre,
-                   6: New_Era_for_All,
-                   7: Tech_Talk,
-                   8: Homemade_original
-                #    9: 
-                   }
-    
-    welcome_info = '''>>> 你，国之栋梁，请注意节制
+    rcon = get_redis()
+    base_url = 'http://t66y.com/'
+    url_list = ["http://t66y.com/thread0806.php?fid=16&page=1"]
+    for url in url_list:
+        index_queue.put(url)
+    key_words = ['原创', '原創']
+    save_path = '/root/t66y'  # 默认目录
 
-    1. 亚洲无码     Asia_non_mosaic
-    2. 亚洲有码     Asia_mosaic
-    3. 欧美原创     Original_Western
-    4. 动漫原创     Original_Animation
-    5. 达盖尔的旗帜 Flag_of_Daguerre
-    6. 新时代的我们 New_Era_for_All 
-    7. 技术讨论区   Tech_Talk
-    8. 国产原创区   Homemade_original
-    '''
-    print(welcome_info)
-    save_path = 't66y'  # 默认目录
-    # key_words = ['原创','原創']
-    key_words = []
-
-    download_all_from_range(Homemade_original, 1, 20, key_words, save_path)
-    # download_all_from_range(Tech_Talk, 1, 20, key_words, save_path)
-    # m = search_item(key_words, get_range(Tech_Talk,1,1))
-    # for s in m:
-    #     print(s)
-    print(key_words)
-    print("-========= end ===========-")
+    main()
